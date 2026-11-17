@@ -1,0 +1,33 @@
+name: Στατιστικά Τιπούκειτου
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # κάθε 10 λεπτά (το GitHub μπορεί να καθυστερήσει λίγα λεπτά)
+  workflow_dispatch:          # κουμπί «Run workflow» για χειροκίνητη εκτέλεση
+
+permissions:
+  contents: write             # μόνο για το «keepalive» παρακάτω
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ενημέρωση στατιστικών
+        run: python3 update_stats.py
+        env:
+          BS_URL: https://tipoukeitostheo.gr
+          BS_TOKEN_ID: ${{ secrets.BS_TOKEN_ID }}
+          BS_TOKEN_SECRET: ${{ secrets.BS_TOKEN_SECRET }}
+      # Το GitHub σταματά τις προγραμματισμένες εργασίες μετά από 60 μέρες χωρίς αλλαγές στο repo·
+      # μια κενή αλλαγή κάθε ~25 μέρες το κρατά ενεργό.
+      - name: Keepalive
+        run: |
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt 2160000 ]; then
+            git config user.name "stats-bot"
+            git config user.email "stats-bot@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive"
+            git push
+          fi

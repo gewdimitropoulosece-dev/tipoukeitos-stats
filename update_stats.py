@@ -2,7 +2,7 @@
 """Ενημερώνει τα στατιστικά του Τιπούκειτου (ΜΟΝΟ αριθμούς) στο αρχείο #311 του site.
 
 Διαβάζει από το API του BookStack πότε ήταν ενεργός τελευταία φορά κάθε χρήστης
-και αποθηκεύει: μέλη, συνδεδεμένους (τελευταία 10'), ενεργούς σήμερα και εβδομάδα.
+και αποθηκεύει: μέλη, ενεργούς την τελευταία ώρα, ενεργούς σήμερα και εβδομάδα.
 Ονόματα και email δεν αποθηκεύονται και δεν τυπώνονται πουθενά.
 """
 import json
@@ -17,7 +17,7 @@ BASE = os.environ.get("BS_URL", "https://tipoukeitostheo.gr").rstrip("/")
 AUTH = "Token %s:%s" % (os.environ["BS_TOKEN_ID"], os.environ["BS_TOKEN_SECRET"])
 ATTACHMENT_ID = 311   # tk-stats.json
 PAGE_ID = 131         # σελίδα «Κώδικας» στο βιβλίο «Σύστημα»
-ONLINE_MINUTES = 10
+ONLINE_MINUTES = 60   # «ενεργοί την τελευταία ώρα»
 
 
 def api(path, data=None, content_type=None):

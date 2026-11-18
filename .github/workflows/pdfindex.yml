@@ -1,0 +1,21 @@
+name: Ευρετήριο PDF
+
+on:
+  schedule:
+    - cron: "17 2 * * *"   # κάθε βράδυ (05:17 ώρα Ελλάδας το χειμώνα)
+  workflow_dispatch:       # κουμπί «Run workflow» για άμεση ενημέρωση
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Εργαλείο κειμένου PDF
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+      - name: Δημιουργία ευρετηρίου
+        run: python3 build_pdf_index.py
+        env:
+          BS_URL: https://tipoukeitostheo.gr
+          BS_TOKEN_ID: ${{ secrets.BS_TOKEN_ID }}
+          BS_TOKEN_SECRET: ${{ secrets.BS_TOKEN_SECRET }}

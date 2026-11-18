@@ -104,7 +104,7 @@ def content_info(now):
             note(page(at["uploaded_to"]), parse(at.get("updated_at")) or created, bool(created and created > cutoff))
     # Διαγραφές (κάδος ανακύκλωσης) μετράνε κι αυτές ως αλλαγή — εκτός «Σύστημα» (114) / «Συζητήσεις» (115)
     try:
-        for x in api("/api/recycle-bin?count=10").get("data", []):
+        for x in api("/api/recycle-bin?sort=-created_at&count=10").get("data", []):
             d = x.get("deletable") or {}
             bk = d.get("book_id") or (d.get("id") if x.get("deletable_type") == "book" else None)
             if bk in (114, 115):

@@ -6,7 +6,7 @@
   ό,τι είναι κλειδωμένο για κάποιον από αυτούς δεν μπαίνει ποτέ στο ευρετήριο.
 - Βγάζει το κείμενο ανά σελίδα με το pdftotext (poppler). Τα σκαναρισμένα PDF
   (φωτογραφίες σελίδων) δεν έχουν κείμενο και παραλείπονται.
-- Ανεβάζει το ευρετήριο (json.gz) στο αρχείο #312 του «Σύστημα → Κώδικας».
+- Ανεβάζει το ευρετήριο (json.gz) στο αρχείο #312 της σελίδας «Σύστημα → Ευρετήριο».
 """
 import base64
 import gzip
@@ -22,7 +22,7 @@ import uuid
 BASE = os.environ.get("BS_URL", "https://tipoukeitostheo.gr").rstrip("/")
 AUTH = "Token %s:%s" % (os.environ["BS_TOKEN_ID"], os.environ["BS_TOKEN_SECRET"])
 INDEX_ATTACHMENT = 312
-PAGE_ID = 131
+PAGE_ID = 147      # σελίδα «Ευρετήριο» (μόνο ρόλοι φοιτητών)
 STUDENT_ROLES = (3, 5, 6)      # Viewer, Viewer_2, Viewer_3
 SKIP_BOOKS = ("systima", "sizitiseis")
 

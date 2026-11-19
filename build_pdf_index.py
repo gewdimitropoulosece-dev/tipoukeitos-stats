@@ -110,9 +110,14 @@ def pdf_page_count(path):
     return int(m.group(1)) if m else 0
 
 
+DIAG = {"errors": [], "ocr": []}
+
+
 def ocr_one(img):
     res = subprocess.run(["tesseract", img, "stdout", "-l", OCR_LANGS, "--psm", "3"],
                          capture_output=True, timeout=300)
+    if res.returncode != 0 and len(DIAG["errors"]) < 5:
+        DIAG["errors"].append(res.stderr.decode("utf-8", "replace")[-300:])
     t = res.stdout.decode("utf-8", "replace")
     t = re.sub(r"(\w)-\n(\w)", r"\1\2", t)          # λέξεις κομμένες στο τέλος γραμμής
     return " ".join(t.split())
@@ -255,6 +260,14 @@ def main():
     docs, rows = [], []
     skipped_locked = skipped_scanned = failed = 0
     ocr_docs = ocr_pages = ocr_new = 0
+    # Διάγνωση OCR (γράφεται και μέσα στο ευρετήριο, πεδίο "x"): έκδοση, γλώσσες, σφάλματα
+    try:
+        v = subprocess.run(["tesseract", "--version"], capture_output=True, timeout=30)
+        DIAG["tess"] = (v.stdout or v.stderr).decode("utf-8", "replace").splitlines()[0][:80]
+        l = subprocess.run(["tesseract", "--list-langs"], capture_output=True, timeout=30)
+        DIAG["langs"] = [x for x in (l.stdout or l.stderr).decode("utf-8", "replace").split() if len(x) <= 8][-20:]
+    except Exception as e:
+        DIAG["tess"] = "ERR " + type(e).__name__
     prev = previous_ocr()
     deadline = started + OCR_MINUTES * 60
     for a in attachments:
@@ -291,7 +304,15 @@ def main():
                     useful = list(old[1])
                     start = old[0].get("on") or 0
                 if start and time.time() < deadline:
-                    got, nxt, total = ocr_pdf(data, start, deadline)
+                    try:
+                        got, nxt, total = ocr_pdf(data, start, deadline)
+                    except Exception as e:
+                        DIAG["errors"].append("ocr_pdf %d: %s %s" % (a["id"], type(e).__name__, str(e)[:200]))
+                        got, nxt, total = [], 0, 0
+                    DIAG["ocr"].append({"a": a["id"], "pages": total, "got": len(got), "chars": sum(len(t) for _, t in got)})
+                    # αν το OCR δεν δουλεύει καθόλου (π.χ. λείπει γλώσσα), δεν χάνουμε χρόνο στα υπόλοιπα
+                    if not got and DIAG["errors"] and len(DIAG["ocr"]) >= 2 and not any(x["got"] for x in DIAG["ocr"]):
+                        deadline = 0
                     useful += got
                     ocr_new += len(got)
                     start = nxt
@@ -326,7 +347,7 @@ def main():
     except Exception as e:
         print("WARN school", type(e).__name__, file=sys.stderr)
 
-    blob = gzip.compress(json.dumps({"v": 1, "t": int(time.time() * 1000), "d": docs, "p": rows},
+    blob = gzip.compress(json.dumps({"v": 1, "t": int(time.time() * 1000), "d": docs, "p": rows, "x": DIAG},
                                     ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 9)
     b = uuid.uuid4().hex
     def field(name, value):

@@ -5,10 +5,14 @@
 - Κρατά ΜΟΝΟ όσα βλέπουν ΚΑΙ οι τρεις ρόλοι φοιτητών (Viewer, Viewer_2, Viewer_3):
   ό,τι είναι κλειδωμένο για κάποιον από αυτούς δεν μπαίνει ποτέ στο ευρετήριο.
 - Βγάζει το κείμενο ανά σελίδα με το pdftotext (poppler). Τα σκαναρισμένα PDF
-  (φωτογραφίες σελίδων) δεν έχουν κείμενο και παραλείπονται.
+  (φωτογραφίες σελίδων) διαβάζονται με OCR (tesseract: νέα + πολυτονικά ελληνικά).
+  Το OCR είναι αργό: το αποτέλεσμα ξαναχρησιμοποιείται από το προηγούμενο ευρετήριο
+  όσο το PDF δεν αλλάζει, και κάθε βράδυ συνεχίζει από όπου σταμάτησε (όριο χρόνου).
 - Ανεβάζει το ευρετήριο (json.gz) στο αρχείο #312 της σελίδας «Σύστημα → Ευρετήριο».
 """
 import base64
+import concurrent.futures
+import glob
 import html
 import re
 import gzip
@@ -28,6 +32,9 @@ INDEX_ATTACHMENT = 312
 PAGE_ID = 147      # σελίδα «Ευρετήριο» (μόνο ρόλοι φοιτητών)
 STUDENT_ROLES = (3, 5, 6)      # Viewer, Viewer_2, Viewer_3
 SKIP_BOOKS = ("systima", "sizitiseis")
+OCR_LANGS = "ell+grc+eng"
+OCR_MINUTES = float(os.environ.get("OCR_MINUTES", "80"))   # χρόνος OCR ανά εκτέλεση
+OCR_CHUNK = 24                                            # σελίδες ανά γύρο
 
 
 def api(path, data=None, content_type=None, tries=3):
@@ -97,6 +104,70 @@ def pdf_pages(data):
     return [" ".join(p.split()) for p in text.split("\f")]
 
 
+def pdf_page_count(path):
+    res = subprocess.run(["pdfinfo", path], capture_output=True, timeout=60)
+    m = re.search(rb"^Pages:\s+(\d+)", res.stdout, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def ocr_one(img):
+    res = subprocess.run(["tesseract", img, "stdout", "-l", OCR_LANGS, "--psm", "3"],
+                         capture_output=True, timeout=300)
+    t = res.stdout.decode("utf-8", "replace")
+    t = re.sub(r"(\w)-\n(\w)", r"\1\2", t)          # λέξεις κομμένες στο τέλος γραμμής
+    return " ".join(t.split())
+
+
+def ocr_pdf(data, start, deadline):
+    """OCR από τη σελίδα start· σταματά στο όριο χρόνου. Επιστρέφει (σελίδες, επόμενη σελίδα ή 0, σύνολο)."""
+    out = []
+    with tempfile.TemporaryDirectory() as d:
+        pdf = os.path.join(d, "f.pdf")
+        with open(pdf, "wb") as f:
+            f.write(data)
+        total = pdf_page_count(pdf)
+        page = max(1, start)
+        workers = max(2, os.cpu_count() or 2)
+        while page <= total:
+            if time.time() > deadline:
+                return out, page, total
+            last = min(total, page + OCR_CHUNK - 1)
+            for old in glob.glob(os.path.join(d, "p-*.png")):
+                os.remove(old)
+            subprocess.run(["pdftoppm", "-r", "200", "-gray", "-png", "-f", str(page), "-l", str(last),
+                            pdf, os.path.join(d, "p")], capture_output=True, timeout=900)
+            imgs = sorted(glob.glob(os.path.join(d, "p-*.png")),
+                          key=lambda x: int(re.search(r"-(\d+)\.png$", x).group(1)))
+            with concurrent.futures.ThreadPoolExecutor(workers) as ex:
+                texts = list(ex.map(ocr_one, imgs))
+            for img, t in zip(imgs, texts):
+                n = int(re.search(r"-(\d+)\.png$", img).group(1))
+                if len(t) >= 30:
+                    out.append((n, t))
+            page = last + 1
+    return out, 0, total
+
+
+def previous_ocr():
+    """OCR από το προηγούμενο ευρετήριο: {attachment id: (doc, [σελίδες])}."""
+    try:
+        full = api("/api/attachments/%d" % INDEX_ATTACHMENT)
+        old = json.loads(gzip.decompress(base64.b64decode(full.get("content") or "")).decode("utf-8"))
+    except Exception as e:
+        print("WARN previous index", type(e).__name__, file=sys.stderr)
+        return {}
+    keep = {}
+    for i, d in enumerate(old.get("d", [])):
+        if d.get("o") and d.get("a"):
+            keep[d["a"]] = (d, [])
+    by_index = {i: d["a"] for i, d in enumerate(old.get("d", [])) if d.get("o") and d.get("a")}
+    for row in old.get("p", []):
+        a = by_index.get(row[0])
+        if a:
+            keep[a][1].append((row[1], row[2]))
+    return keep
+
+
 # ---------- Σχολή (theo.auth.gr): ανακοινώσεις και προγράμματα, για το AI ----------
 SCHOOL = "https://theo.auth.gr"
 SCHOOL_CAT = 31
@@ -136,7 +207,7 @@ def schedule_chunks(text):
         part = []
         for l in ls:
             part.append(l)
-            if sum(len(x) for x in part) > 2600:
+            if sum(len(x) for x in part) > 1300:
                 out.append((head, part)); part = []
         if part:
             out.append((head, part))
@@ -183,6 +254,9 @@ def main():
     pages, books = {}, {}
     docs, rows = [], []
     skipped_locked = skipped_scanned = failed = 0
+    ocr_docs = ocr_pages = ocr_new = 0
+    prev = previous_ocr()
+    deadline = started + OCR_MINUTES * 60
     for a in attachments:
         pid = a.get("uploaded_to")
         if not pid:
@@ -207,13 +281,35 @@ def main():
             data = base64.b64decode(full.get("content") or "")
             texts = pdf_pages(data)
             useful = [(i + 1, t) for i, t in enumerate(texts) if len(t) >= 30]
+            extra = {}
             if not useful:
-                skipped_scanned += 1
-                continue
+                # Σκαναρισμένο: OCR (ή ό,τι έγινε ήδη σε προηγούμενο βράδυ, αν το PDF δεν άλλαξε)
+                up = a.get("updated_at") or full.get("updated_at") or ""
+                old = prev.get(a["id"])
+                start = 1
+                if old and old[0].get("up") == up:
+                    useful = list(old[1])
+                    start = old[0].get("on") or 0
+                if start and time.time() < deadline:
+                    got, nxt, total = ocr_pdf(data, start, deadline)
+                    useful += got
+                    ocr_new += len(got)
+                    start = nxt
+                    print("OCR attachment %d: +%d pages%s" % (a["id"], len(got), (" (continues at %d/%d)" % (nxt, total)) if nxt else ""))
+                if not useful:
+                    skipped_scanned += 1
+                    continue
+                extra = {"o": 1, "up": up}
+                if start:
+                    extra["on"] = start
+                ocr_docs += 1
+                ocr_pages += len(useful)
             di = len(docs)
-            docs.append({"a": a["id"], "n": a.get("name", ""),
-                         "u": "/books/%s/page/%s" % (book_slug, pg.get("slug", "")),
-                         "c": books[pg["book_id"]]})
+            doc = {"a": a["id"], "n": a.get("name", ""),
+                   "u": "/books/%s/page/%s" % (book_slug, pg.get("slug", "")),
+                   "c": books[pg["book_id"]]}
+            doc.update(extra)
+            docs.append(doc)
             rows += [[di, n, t] for n, t in useful]
         except Exception as e:  # ένα χαλασμένο αρχείο δεν σταματά όλη τη δουλειά
             failed += 1
@@ -240,9 +336,9 @@ def main():
                'Content-Type: application/gzip\r\n\r\n' % b).encode("utf-8")
             + blob + ("\r\n--%s--\r\n" % b).encode("utf-8"))
     api("/api/attachments/%d" % INDEX_ATTACHMENT, data=body, content_type="multipart/form-data; boundary=" + b)
-    print("OK pdf:%d indexed:%d school:%d pages:%d locked:%d scanned:%d failed:%d size:%.1fMB time:%ds" % (
+    print("OK pdf:%d indexed:%d school:%d pages:%d locked:%d scanned:%d failed:%d ocr:%d docs/%d pages (+%d new) size:%.1fMB time:%ds" % (
         len(attachments), len(docs) - school, school, len(rows), skipped_locked, skipped_scanned, failed,
-        len(blob) / 1048576, time.time() - started))
+        ocr_docs, ocr_pages, ocr_new, len(blob) / 1048576, time.time() - started))
 
 
 if __name__ == "__main__":

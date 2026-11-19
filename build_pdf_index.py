@@ -155,7 +155,9 @@ def school_docs():
                      [[1, ("Ανακοίνωση της Σχολής (%s): %s. %s" % (date, title, body))[:6000]]]))
         if not re.search(r"πρόγραμμα|προγραμμα", title, re.I) or not re.search(r"εξεταστ|εξαμ|μαθημ|ωρολ", title, re.I):
             continue
-        for link in re.findall(r'href="([^"]+\.pdf)"', p["content"]["rendered"], re.I)[:3]:
+        anchors = re.findall(r'<a[^>]+href="([^"]+\.pdf)"[^>]*>(.*?)</a>', p["content"]["rendered"], re.I | re.S)
+        for link, label in anchors[:3]:
+            label = " ".join(html.unescape(re.sub(r"<[^>]+>", "", label)).replace("(pdf)", "").split())
             try:
                 data = http(html.unescape(link), binary=True)
                 with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
@@ -166,7 +168,7 @@ def school_docs():
                 if not chunks:
                     continue
                 stem = re.sub(r"[_\-]+", " ", os.path.splitext(os.path.basename(urllib.parse.urlparse(html.unescape(link)).path))[0]).strip()
-                name = "%s — %s (%s)" % (title, stem, date)
+                name = "%s (ανακοίνωση %s)" % (label if len(label) > 8 else "%s — %s" % (title, stem), date)
                 docs.append(({"a": 0, "x": html.unescape(link), "n": name, "u": p["link"], "c": "Προγράμματα Σχολής", "dt": date},
                              [[1, ("%s — %s" % (name, ch))] for ch in chunks]))
             except Exception as e:

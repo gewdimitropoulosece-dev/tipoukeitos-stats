@@ -8,11 +8,11 @@ on:
 jobs:
   index:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
-      - name: Εργαλείο κειμένου PDF
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+      - name: Εργαλεία κειμένου PDF και OCR (νέα + πολυτονικά ελληνικά)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-ell tesseract-ocr-grc
       - name: Δημιουργία ευρετηρίου
         run: python3 build_pdf_index.py
         env:

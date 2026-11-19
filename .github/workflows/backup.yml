@@ -1,0 +1,27 @@
+name: Αντίγραφο ασφαλείας
+
+on:
+  schedule:
+    - cron: "40 1 * * 0"   # κάθε Κυριακή ξημερώματα (03:40 ώρα Ελλάδας το χειμώνα)
+  workflow_dispatch:       # κουμπί «Run workflow» για αντίγραφο τώρα
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Λήψη όλου του περιεχομένου και κρυπτογράφηση
+        run: python3 backup.py
+        env:
+          BS_URL: https://tipoukeitostheo.gr
+          BS_TOKEN_ID: ${{ secrets.BS_TOKEN_ID }}
+          BS_TOKEN_SECRET: ${{ secrets.BS_TOKEN_SECRET }}
+          OUT_DIR: out
+      # Μόνο τα κρυπτογραφημένα αρχεία ανεβαίνουν· ανοίγουν μόνο με το ιδιωτικό κλειδί του διαχειριστή
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tipoukeitos-backup
+          path: out/final/
+          retention-days: 90
+          compression-level: 0

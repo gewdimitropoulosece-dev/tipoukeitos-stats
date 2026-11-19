@@ -9,6 +9,8 @@
 - Ανεβάζει το ευρετήριο (json.gz) στο αρχείο #312 της σελίδας «Σύστημα → Ευρετήριο».
 """
 import base64
+import html
+import re
 import gzip
 import json
 import os
@@ -16,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -94,6 +97,83 @@ def pdf_pages(data):
     return [" ".join(p.split()) for p in text.split("\f")]
 
 
+# ---------- Σχολή (theo.auth.gr): ανακοινώσεις και προγράμματα, για το AI ----------
+SCHOOL = "https://theo.auth.gr"
+SCHOOL_CAT = 31
+DAYS = ("ΔΕΥΤΕΡΑ", "ΤΡΙΤΗ", "ΤΕΤΑΡΤΗ", "ΠΕΜΠΤΗ", "ΠΑΡΑΣΚΕΥΗ", "ΣΑΒΒΑΤΟ")
+
+
+def http(url, binary=False):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (tipoukeitos-index)"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        data = r.read()
+    return data if binary else data.decode("utf-8", "replace")
+
+
+def strip_html(h):
+    h = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", h, flags=re.S | re.I)
+    h = re.sub(r"<br\s*/?>|</p>|</li>|</h\d>|</tr>", "\n", h, flags=re.I)
+    return html.unescape(re.sub(r"<[^>]+>", " ", h))
+
+
+def schedule_chunks(text):
+    """Πρόγραμμα (pdftotext -layout): ανά ημέρα, κάθε γραμμή «ώρα | μάθημα | διδάσκων | αίθουσα»."""
+    lines = [re.sub(r" {3,}", " | ", l.strip()) for l in text.splitlines()]
+    lines = [l for l in lines if l and not l.startswith("Column")]
+    chunks, cur, head = [], [], ""
+    for l in lines:
+        up = l.replace(" ", "")
+        if any(up.startswith(d) for d in DAYS) and len(l) < 25:
+            if cur:
+                chunks.append((head, cur))
+            head, cur = l, []
+        else:
+            cur.append(l)
+    if cur:
+        chunks.append((head, cur))
+    out = []
+    for head, ls in chunks:
+        part = []
+        for l in ls:
+            part.append(l)
+            if sum(len(x) for x in part) > 2600:
+                out.append((head, part)); part = []
+        if part:
+            out.append((head, part))
+    return [((h + ": ") if h else "") + " \n".join(ls) for h, ls in out]
+
+
+def school_docs():
+    """Πρόσφατες ανακοινώσεις της Σχολής και τα PDF των προγραμμάτων (εξαμήνου / εξεταστικής)."""
+    docs = []
+    posts = json.loads(http("%s/wp-json/wp/v2/posts?categories=%d&per_page=40&_fields=date,title,link,content" % (SCHOOL, SCHOOL_CAT)))
+    for p in posts:
+        title = html.unescape(re.sub(r"<[^>]+>", "", p["title"]["rendered"])).strip()
+        date = p["date"][:10]
+        body = " ".join(strip_html(p["content"]["rendered"]).split())
+        docs.append(({"a": 0, "x": p["link"], "n": title, "u": p["link"], "c": "Ανακοινώσεις Σχολής", "dt": date},
+                     [[1, ("Ανακοίνωση της Σχολής (%s): %s. %s" % (date, title, body))[:6000]]]))
+        if not re.search(r"πρόγραμμα|προγραμμα", title, re.I) or not re.search(r"εξεταστ|εξαμ|μαθημ|ωρολ", title, re.I):
+            continue
+        for link in re.findall(r'href="([^"]+\.pdf)"', p["content"]["rendered"], re.I)[:3]:
+            try:
+                data = http(html.unescape(link), binary=True)
+                with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+                    f.write(data); f.flush()
+                    res = subprocess.run(["pdftotext", "-layout", "-enc", "UTF-8", "-q", f.name, "-"], capture_output=True, timeout=120)
+                txt = res.stdout.decode("utf-8", "replace")
+                chunks = schedule_chunks(txt)
+                if not chunks:
+                    continue
+                stem = re.sub(r"[_\-]+", " ", os.path.splitext(os.path.basename(urllib.parse.urlparse(html.unescape(link)).path))[0]).strip()
+                name = "%s — %s (%s)" % (title, stem, date)
+                docs.append(({"a": 0, "x": html.unescape(link), "n": name, "u": p["link"], "c": "Προγράμματα Σχολής", "dt": date},
+                             [[1, ("%s — %s" % (name, ch))] for ch in chunks]))
+            except Exception as e:
+                print("WARN school pdf", type(e).__name__, file=sys.stderr)
+    return docs
+
+
 def main():
     started = time.time()
     attachments = [a for a in listing("/api/attachments")
@@ -137,6 +217,17 @@ def main():
             failed += 1
             print("WARN attachment", a.get("id"), type(e).__name__, file=sys.stderr)
 
+    # Σχολή: ανακοινώσεις και προγράμματα (εξωτερικοί σύνδεσμοι)
+    school = 0
+    try:
+        for doc, prow in school_docs():
+            di = len(docs)
+            docs.append(doc)
+            rows += [[di, n, " ".join(t.split()) if doc["c"] != "Προγράμματα Σχολής" else t] for n, t in prow]
+            school += 1
+    except Exception as e:
+        print("WARN school", type(e).__name__, file=sys.stderr)
+
     blob = gzip.compress(json.dumps({"v": 1, "t": int(time.time() * 1000), "d": docs, "p": rows},
                                     ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 9)
     b = uuid.uuid4().hex
@@ -147,8 +238,8 @@ def main():
                'Content-Type: application/gzip\r\n\r\n' % b).encode("utf-8")
             + blob + ("\r\n--%s--\r\n" % b).encode("utf-8"))
     api("/api/attachments/%d" % INDEX_ATTACHMENT, data=body, content_type="multipart/form-data; boundary=" + b)
-    print("OK pdf:%d indexed:%d pages:%d locked:%d scanned:%d failed:%d size:%.1fMB time:%ds" % (
-        len(attachments), len(docs), len(rows), skipped_locked, skipped_scanned, failed,
+    print("OK pdf:%d indexed:%d school:%d pages:%d locked:%d scanned:%d failed:%d size:%.1fMB time:%ds" % (
+        len(attachments), len(docs) - school, school, len(rows), skipped_locked, skipped_scanned, failed,
         len(blob) / 1048576, time.time() - started))
 
 

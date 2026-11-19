@@ -113,9 +113,17 @@ def pdf_page_count(path):
 DIAG = {"errors": [], "ocr": []}
 
 
+OCR_ENV = dict(os.environ, OMP_THREAD_LIMIT="1")   # ένα νήμα ανά tesseract: τρέχουν ήδη πολλά παράλληλα (αλλιώς «πνίγονται»)
+
+
 def ocr_one(img):
-    res = subprocess.run(["tesseract", img, "stdout", "-l", OCR_LANGS, "--psm", "3"],
-                         capture_output=True, timeout=300)
+    try:
+        res = subprocess.run(["tesseract", img, "stdout", "-l", OCR_LANGS, "--psm", "3"],
+                             capture_output=True, timeout=240, env=OCR_ENV)
+    except subprocess.TimeoutExpired:
+        if len(DIAG["errors"]) < 5:
+            DIAG["errors"].append("timeout " + os.path.basename(img))
+        return ""
     if res.returncode != 0 and len(DIAG["errors"]) < 5:
         DIAG["errors"].append(res.stderr.decode("utf-8", "replace")[-300:])
     t = res.stdout.decode("utf-8", "replace")

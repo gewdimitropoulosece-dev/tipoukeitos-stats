@@ -104,6 +104,86 @@ def pdf_pages(data):
     return [" ".join(p.split()) for p in text.split("\f")]
 
 
+# ---------- Και άλλα αρχεία εκτός από PDF: Word, PowerPoint, OpenDocument, κείμενο, εικόνες ----------
+# Χωρίζονται σε «σελίδες» για τις παραπομπές: PowerPoint ανά διαφάνεια, τα υπόλοιπα ανά ~2.500 χαρακτήρες.
+INDEX_EXT = {"pdf", "docx", "pptx", "odt", "odp", "txt", "md", "jpg", "jpeg", "png", "webp"}
+CHUNK = 2500
+
+
+def chunk_text(text):
+    paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n|\r\n\s*\r\n", text)]
+    out, cur = [], ""
+    for p in paras:
+        if not p:
+            continue
+        if cur and len(cur) + len(p) > CHUNK:
+            out.append(cur); cur = ""
+        while len(p) > CHUNK * 1.5:
+            cut = p.rfind(" ", 0, CHUNK)
+            cut = cut if cut > CHUNK // 2 else CHUNK
+            if cur:
+                out.append(cur); cur = ""
+            out.append(p[:cut]); p = p[cut:].strip()
+        cur = (cur + " " + p).strip()
+    if cur:
+        out.append(cur)
+    return out
+
+
+def xml_text(xml, para_tag, text_tag):
+    """Κείμενο από XML του Office/ODF: μία γραμμή ανά παράγραφο."""
+    lines = []
+    # αλλαγές γραμμής και tab μέσα στην παράγραφο → κενό (αλλιώς οι λέξεις κολλάνε)
+    xml = re.sub(r"<(?:a|w):(?:br|tab|cr)\b[^>]*?(?:/>|>.*?</(?:a|w):(?:br|tab|cr)>)", "<%s> </%s>" % (text_tag, text_tag), xml, flags=re.S)
+    for para in re.split(r"</%s>" % para_tag, xml):
+        t = "".join(html.unescape(x) for x in re.findall(r"<%s(?:\s[^>]*)?>([^<]*)</%s>" % (text_tag, text_tag), para))
+        if t.strip():
+            lines.append(t)
+    return "\n\n".join(lines)
+
+
+def office_pages(data, ext):
+    import io, zipfile
+    z = zipfile.ZipFile(io.BytesIO(data))
+    if ext == "docx":
+        xml = z.read("word/document.xml").decode("utf-8", "replace")
+        # αλλαγές σελίδας του Word → χωριστές «σελίδες» όπου υπάρχουν
+        parts = re.split(r'<w:br [^>]*w:type="page"[^>]*/>|<w:lastRenderedPageBreak/>', xml)
+        pages = [xml_text(x, "w:p", "w:t") for x in parts]
+        pages = [p for p in pages if p.strip()]
+        if len(pages) > 1 and max(len(p) for p in pages) <= CHUNK * 2:
+            return [" ".join(p.split()) for p in pages]
+        return chunk_text("\n\n".join(pages))
+    if ext == "pptx":
+        names = sorted((n for n in z.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)),
+                       key=lambda n: int(re.findall(r"\d+", n)[-1]))
+        return [" ".join(xml_text(z.read(n).decode("utf-8", "replace"), "a:p", "a:t").split()) for n in names]
+    if ext in ("odt", "odp"):
+        xml = z.read("content.xml").decode("utf-8", "replace")
+        xml = re.sub(r"<text:(s|tab|line-break)[^>]*/>", " ", xml)
+        if ext == "odp":
+            return [" ".join(re.sub(r"<[^>]+>", " ", html.unescape(sl)).split()) for sl in re.split(r"</draw:page>", xml)[:-1]]
+        return chunk_text(re.sub(r"<[^>]+>", "", re.sub(r"</text:(p|h)>", "\n\n", xml)))
+    return []
+
+
+def text_pages(data):
+    try:
+        t = data.decode("utf-8")
+    except UnicodeDecodeError:
+        t = data.decode("cp1253", "replace")
+    return chunk_text(t.replace("﻿", ""))
+
+
+def image_pages(data, ext):
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "img." + ext)
+        with open(f, "wb") as fh:
+            fh.write(data)
+        t = ocr_one(f)
+    return [t] if len(t) >= 30 else []
+
+
 def pdf_page_count(path):
     res = subprocess.run(["pdfinfo", path], capture_output=True, timeout=60)
     m = re.search(rb"^Pages:\s+(\d+)", res.stdout, re.M)
@@ -260,10 +340,13 @@ def school_docs():
     return docs
 
 
+NONPDF = {}
+
+
 def main():
     started = time.time()
     attachments = [a for a in listing("/api/attachments")
-                   if not a.get("external") and (a.get("extension") or "").lower() == "pdf"]
+                   if not a.get("external") and (a.get("extension") or "").lower() in INDEX_EXT]
     pages, books, book_slugs = {}, {}, {}
     docs, rows = [], []
     skipped_locked = skipped_scanned = failed = 0
@@ -302,9 +385,24 @@ def main():
                 continue
             full = api("/api/attachments/%d" % a["id"])
             data = base64.b64decode(full.get("content") or "")
-            texts = pdf_pages(data)
-            useful = [(i + 1, t) for i, t in enumerate(texts) if len(t) >= 30]
+            ext = (a.get("extension") or "").lower()
             extra = {}
+            if ext != "pdf":
+                if ext in ("txt", "md"):
+                    texts = text_pages(data)
+                elif ext in ("jpg", "jpeg", "png", "webp"):
+                    texts = image_pages(data, ext)
+                else:
+                    texts = office_pages(data, ext)
+                useful = [(i + 1, t) for i, t in enumerate(texts) if len(t) >= 30]
+                extra = {"e": ext}
+                NONPDF[ext] = NONPDF.get(ext, 0) + 1
+                if not useful:
+                    skipped_scanned += 1
+                    continue
+            else:
+                texts = pdf_pages(data)
+                useful = [(i + 1, t) for i, t in enumerate(texts) if len(t) >= 30]
             if not useful:
                 # Σκαναρισμένο: OCR (ή ό,τι έγινε ήδη σε προηγούμενο βράδυ, αν το PDF δεν άλλαξε)
                 up = a.get("updated_at") or full.get("updated_at") or ""
@@ -357,6 +455,7 @@ def main():
     except Exception as e:
         print("WARN school", type(e).__name__, file=sys.stderr)
 
+    DIAG["nonpdf"] = NONPDF
     blob = gzip.compress(json.dumps({"v": 1, "t": int(time.time() * 1000), "d": docs, "p": rows, "x": DIAG},
                                     ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 9)
     b = uuid.uuid4().hex

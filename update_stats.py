@@ -24,7 +24,7 @@ ATTACHMENT_ID = 311   # tk-stats.json
 PAGE_ID = 131         # σελίδα «Κώδικας» στο βιβλίο «Σύστημα»
 ONLINE_MINUTES = 60   # «ενεργοί την τελευταία ώρα»
 FRESH_DAYS = 14       # «νέο» για 14 ημέρες
-STUDENT_ROLES = (3, 5, 6)
+STUDENT_ROLES = (3,)   # Viewer: όλα τα εγκεκριμένα μέλη (οι #5/#9 σβήστηκαν, ο #6 είναι πρόσθετος ρόλος)
 SKIP_BOOKS = ("systima", "sizitiseis")
 
 

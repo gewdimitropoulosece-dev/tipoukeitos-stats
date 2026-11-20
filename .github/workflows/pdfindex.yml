@@ -25,8 +25,8 @@ jobs:
         if: github.event.schedule == '47 * * * *'
         run: python3 build_pdf_index.py --check
       - name: Εργαλεία κειμένου PDF και OCR (νέα + πολυτονικά ελληνικά)
-        if: steps.chk.outputs.new != '0'
+        if: github.event.schedule != '47 * * * *' || steps.chk.outputs.new == '1'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-ell tesseract-ocr-grc
       - name: Δημιουργία ευρετηρίου
-        if: steps.chk.outputs.new != '0'
+        if: github.event.schedule != '47 * * * *' || steps.chk.outputs.new == '1'
         run: python3 build_pdf_index.py

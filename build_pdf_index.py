@@ -343,10 +343,46 @@ def school_docs():
 NONPDF = {}
 
 
+def _ts(v):
+    """«2026-11-20T22:41:40.000000Z» → δευτερόλεπτα UTC."""
+    try:
+        import calendar
+        return calendar.timegm(time.strptime(str(v)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except Exception:
+        return 0
+
+
+def needs_update(attachments):
+    """Υπάρχουν αρχεία νεότερα από την έναρξη του τελευταίου ευρετηρίου ή σβησμένα αρχεία;"""
+    try:
+        full = api("/api/attachments/%d" % INDEX_ATTACHMENT)
+        old = json.loads(gzip.decompress(base64.b64decode(full.get("content") or "")).decode("utf-8"))
+    except Exception as e:
+        print("WARN check", type(e).__name__, file=sys.stderr)
+        return True
+    since = (old.get("s") or 0) / 1000.0
+    if not since:
+        return True
+    newer = [a for a in attachments if _ts(a.get("updated_at")) > since]
+    alive = {a["id"] for a in attachments}
+    gone = [d["a"] for d in old.get("d", []) if d.get("a") and d["a"] not in alive]
+    print("check: newer=%d gone=%d" % (len(newer), len(gone)))
+    return bool(newer or gone)
+
+
 def main():
     started = time.time()
     attachments = [a for a in listing("/api/attachments")
                    if not a.get("external") and (a.get("extension") or "").lower() in INDEX_EXT]
+    if "--check" in sys.argv:
+        # Ωριαίος έλεγχος: γράφει new=1/0 για το workflow και σταματά
+        new = needs_update(attachments)
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a") as f:
+                f.write("new=%d\n" % (1 if new else 0))
+        print("new" if new else "no new files")
+        return
     pages, books, book_slugs = {}, {}, {}
     docs, rows = [], []
     skipped_locked = skipped_scanned = failed = 0
@@ -456,7 +492,7 @@ def main():
         print("WARN school", type(e).__name__, file=sys.stderr)
 
     DIAG["nonpdf"] = NONPDF
-    blob = gzip.compress(json.dumps({"v": 1, "t": int(time.time() * 1000), "d": docs, "p": rows, "x": DIAG},
+    blob = gzip.compress(json.dumps({"v": 1, "t": int(time.time() * 1000), "s": int(started * 1000), "d": docs, "p": rows, "x": DIAG},
                                     ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 9)
     b = uuid.uuid4().hex
     def field(name, value):

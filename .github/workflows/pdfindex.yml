@@ -2,20 +2,31 @@ name: Ευρετήριο PDF
 
 on:
   schedule:
-    - cron: "17 2 * * *"   # κάθε βράδυ (05:17 ώρα Ελλάδας το χειμώνα)
+    - cron: "17 2 * * *"   # πλήρες κάθε βράδυ (05:17 ώρα Ελλάδας το χειμώνα)
+    - cron: "47 * * * *"   # κάθε ώρα: μόνο αν ανέβηκαν/άλλαξαν/σβήστηκαν αρχεία
   workflow_dispatch:       # κουμπί «Run workflow» για άμεση ενημέρωση
+
+concurrency:               # ποτέ δύο ευρετήρια μαζί· το επόμενο περιμένει
+  group: pdfindex
+  cancel-in-progress: false
 
 jobs:
   index:
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    env:
+      BS_URL: https://tipoukeitostheo.gr
+      BS_TOKEN_ID: ${{ secrets.BS_TOKEN_ID }}
+      BS_TOKEN_SECRET: ${{ secrets.BS_TOKEN_SECRET }}
     steps:
       - uses: actions/checkout@v4
+      - name: Έλεγχος για νέα αρχεία
+        id: chk
+        if: github.event.schedule == '47 * * * *'
+        run: python3 build_pdf_index.py --check
       - name: Εργαλεία κειμένου PDF και OCR (νέα + πολυτονικά ελληνικά)
+        if: steps.chk.outputs.new != '0'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-ell tesseract-ocr-grc
       - name: Δημιουργία ευρετηρίου
+        if: steps.chk.outputs.new != '0'
         run: python3 build_pdf_index.py
-        env:
-          BS_URL: https://tipoukeitostheo.gr
-          BS_TOKEN_ID: ${{ secrets.BS_TOKEN_ID }}
-          BS_TOKEN_SECRET: ${{ secrets.BS_TOKEN_SECRET }}

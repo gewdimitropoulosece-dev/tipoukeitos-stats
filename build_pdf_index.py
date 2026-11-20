@@ -30,7 +30,7 @@ BASE = os.environ.get("BS_URL", "https://tipoukeitostheo.gr").rstrip("/")
 AUTH = "Token %s:%s" % (os.environ["BS_TOKEN_ID"], os.environ["BS_TOKEN_SECRET"])
 INDEX_ATTACHMENT = 312
 PAGE_ID = 147      # σελίδα «Ευρετήριο» (μόνο ρόλοι φοιτητών)
-STUDENT_ROLES = (3, 5, 6)      # Viewer, Viewer_2, Viewer_3
+STUDENT_ROLES = (3,)           # Viewer: όλα τα εγκεκριμένα μέλη (οι #5/#9 σβήστηκαν, ο #6 είναι πρόσθετος ρόλος Συγγραμμάτων)
 SKIP_BOOKS = ("systima", "sizitiseis")
 OCR_LANGS = "ell+grc+eng"
 OCR_MINUTES = float(os.environ.get("OCR_MINUTES", "80"))   # χρόνος OCR ανά εκτέλεση
@@ -264,7 +264,7 @@ def main():
     started = time.time()
     attachments = [a for a in listing("/api/attachments")
                    if not a.get("external") and (a.get("extension") or "").lower() == "pdf"]
-    pages, books = {}, {}
+    pages, books, book_slugs = {}, {}, {}
     docs, rows = [], []
     skipped_locked = skipped_scanned = failed = 0
     ocr_docs = ocr_pages = ocr_new = 0
@@ -286,7 +286,11 @@ def main():
             if pid not in pages:
                 pages[pid] = api("/api/pages/%d" % pid)
             pg = pages[pid]
-            book_slug = pg.get("book_slug") or ""
+            if pg["book_id"] not in books:
+                bk = api("/api/books/%d" % pg["book_id"])
+                books[pg["book_id"]] = bk.get("name", "")
+                book_slugs[pg["book_id"]] = bk.get("slug", "")
+            book_slug = pg.get("book_slug") or book_slugs.get(pg["book_id"], "")
             if book_slug in SKIP_BOOKS or pg.get("draft"):
                 continue
             chain = [("page", pid)]
@@ -296,8 +300,6 @@ def main():
             if not all(can_view(r, chain) for r in STUDENT_ROLES):
                 skipped_locked += 1
                 continue
-            if pg["book_id"] not in books:
-                books[pg["book_id"]] = api("/api/books/%d" % pg["book_id"]).get("name", "")
             full = api("/api/attachments/%d" % a["id"])
             data = base64.b64decode(full.get("content") or "")
             texts = pdf_pages(data)

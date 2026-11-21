@@ -1,0 +1,54 @@
+name: Υπόλοιπο βοηθού AI
+
+# Δύο φορές τη μέρα ρωτά τον βοηθό αν το υπόλοιπο στην Anthropic τελειώνει
+# (το site το υπολογίζει από όσα έχεις σημειώσει και όσα ξοδεύτηκαν).
+# Αν ναι, ανοίγει μια ειδοποίηση (issue) εδώ με αναφορά στον διαχειριστή → το GitHub στέλνει email.
+# Όταν προσθέσεις υπόλοιπο και το σημειώσεις στο site, η ειδοποίηση κλείνει μόνη της.
+on:
+  schedule:
+    - cron: "0 7,17 * * *"   # 09:00 και 19:00 ώρα Ελλάδας (χειμώνα)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Έλεγχος υπολοίπου και υπενθύμιση
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          d=$(curl -s -X POST -H "Origin: https://tipoukeitostheo.gr" --max-time 25 https://tipoukeitos-ai.tipoukeitos-ai.workers.dev/budget-alert || echo '{}')
+          echo "Απάντηση: $d"
+          level=$(printf '%s' "$d" | python3 -c "import json,sys; print(json.load(sys.stdin).get('level',''))" 2>/dev/null || echo "")
+          days=$(printf '%s' "$d" | python3 -c "import json,sys; v=json.load(sys.stdin).get('days'); print('' if v is None or v>=999 else v)" 2>/dev/null || echo "")
+          open=$(gh issue list -R "$REPO" --label budget --state open --json number -q '.[0].number' 2>/dev/null || echo "")
+          if [ "$level" = "low" ] || [ "$level" = "exam" ]; then
+            if [ -z "$open" ]; then
+              gh label create budget -R "$REPO" --color C9A464 --description "Υπόλοιπο βοηθού AI" 2>/dev/null || true
+              if [ "$level" = "exam" ]; then
+                title="Το υπόλοιπο του βοηθού AI δεν φτάνει ως το τέλος της εξεταστικής"
+              elif [ -n "$days" ]; then
+                title="Το υπόλοιπο του βοηθού AI τελειώνει σε ~$days μέρες"
+              else
+                title="Το υπόλοιπο του βοηθού AI είναι χαμηλό"
+              fi
+              printf '%s\n' "@$OWNER" "" "$title." "" \
+                "1. Πρόσθεσε υπόλοιπο στο https://console.anthropic.com/settings/billing" \
+                "2. Στον Τιπούκειτο, στην αρχική, στο πλαίσιο «Βοηθός AI», πάτα «Πρόσθεσα υπόλοιπο» και γράψε το ποσό." \
+                "" "Μέχρι τότε ο βοηθός δεν σταματά: όταν τελειώσει το υπόλοιπο, συνεχίζει με το Gemini." \
+                "Αυτή η ειδοποίηση κλείνει μόνη της μόλις το υπόλοιπο είναι εντάξει." > body.md
+              gh issue create -R "$REPO" --label budget --title "$title" --body-file body.md
+            else
+              echo "Υπάρχει ήδη ανοιχτή ειδοποίηση #$open"
+            fi
+          elif [ -n "$open" ] && [ "$level" = "ok" ]; then
+            gh issue close "$open" -R "$REPO" --comment "Το υπόλοιπο είναι πλέον εντάξει ✓"
+          else
+            echo "Κατάσταση: ${level:-άγνωστη} — καμία ενέργεια"
+          fi

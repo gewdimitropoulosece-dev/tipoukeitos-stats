@@ -14,6 +14,7 @@ import json
 import os
 import time
 import uuid
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -33,8 +34,23 @@ def api(path, data=None, content_type=None):
         "Authorization": AUTH, "Accept": "application/json", "User-Agent": "tipoukeitos-stats"})
     if content_type:
         req.add_header("Content-Type", content_type)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode("utf-8"))
+    # Επαναπροσπάθεια σε προσωρινά σφάλματα: το ίδιο κλειδί χρησιμοποιεί και το ευρετήριο PDF,
+    # οπότε όσο τρέχει μπορεί να γεμίσει το όριο αιτημάτων του BookStack (429) ή να αργεί ο server (5xx).
+    for i in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if i == 4 or (e.code != 429 and e.code < 500):
+                raise
+            wait = e.headers.get("Retry-After") if e.code == 429 else None
+            wait = min(int(wait), 45) if wait and wait.isdigit() else 5 * (i + 1)
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if i == 4:
+                raise
+            wait = 5 * (i + 1)
+        print("Προσωρινό σφάλμα, νέα προσπάθεια σε %ds" % wait)
+        time.sleep(wait)
 
 
 def parse(ts):

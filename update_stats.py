@@ -13,6 +13,7 @@
 import json
 import os
 import time
+import unicodedata
 import uuid
 import urllib.error
 import urllib.request
@@ -133,6 +134,39 @@ def content_info(now):
     return (int(latest.timestamp() * 1000) if latest else 0), fresh[:80]
 
 
+def _plain(t):
+    return "".join(c for c in unicodedata.normalize("NFD", t or "") if not unicodedata.combining(c))
+
+
+def content_counts(now):
+    """Αριθμοί υλικού για την αρχική: αρχεία, σημειώσεις, θέματα εξετάσεων, νέα αρχεία (14 ημέρες)."""
+    def all_of(path):
+        out, off = [], 0
+        while True:
+            d = api("%s?count=500&offset=%d" % (path, off))
+            out += d.get("data", [])
+            off += 500
+            if off >= d.get("total", 0):
+                return out
+    pages = {pg["id"]: pg for pg in all_of("/api/pages")}
+    cutoff = now - timedelta(days=FRESH_DAYS)
+    n = {"files": 0, "notes": 0, "exams": 0, "recent": 0}
+    for a in all_of("/api/attachments"):
+        pg = pages.get(a.get("uploaded_to"))
+        if not pg or pg.get("draft") or (pg.get("book_slug") or "") in SKIP_BOOKS:
+            continue
+        n["files"] += 1
+        name = _plain(pg.get("name"))
+        if name.startswith("Σημειωσεις"):
+            n["notes"] += 1
+        elif name.startswith("Θεματα"):
+            n["exams"] += 1
+        created = parse(a.get("created_at"))
+        if created and created > cutoff:
+            n["recent"] += 1
+    return n
+
+
 users, offset = [], 0
 while True:
     page = api("/api/users?count=500&offset=%d" % offset)
@@ -157,6 +191,10 @@ try:
     stats["c"], stats["fresh"] = content_info(now)
 except Exception as e:  # τα στατιστικά συνεχίζουν κι αν αποτύχει αυτό
     print("WARN content", type(e).__name__)
+try:
+    stats["n"] = content_counts(now)
+except Exception as e:
+    print("WARN counts", type(e).__name__)
 
 # Αντικατάσταση του αρχείου #311 (multipart με _method=PUT, όπως ορίζει το API)
 b = uuid.uuid4().hex
@@ -167,4 +205,4 @@ body = (field("_method", "PUT") + field("uploaded_to", str(PAGE_ID)) + field("na
            'Content-Type: application/json\r\n\r\n' % b).encode("utf-8")
         + json.dumps(stats).encode("utf-8") + ("\r\n--%s--\r\n" % b).encode("utf-8"))
 api("/api/attachments/%d" % ATTACHMENT_ID, data=body, content_type="multipart/form-data; boundary=" + b)
-print("OK", {k: stats[k] for k in ("members", "online", "today", "week")}, "fresh:", len(stats.get("fresh", [])))
+print("OK", {k: stats[k] for k in ("members", "online", "today", "week")}, "fresh:", len(stats.get("fresh", [])), "n:", stats.get("n"))

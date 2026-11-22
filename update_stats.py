@@ -7,6 +7,7 @@
 
 Επιπλέον, για να φαίνεται αμέσως το νέο υλικό σε όλους:
 - "c": πότε άλλαξε τελευταία φορά υλικό (σελίδα ή αρχείο) — οι browsers ανανεώνουν τότε τη λίστα τους·
+- "x": πότε σβήστηκε τελευταία φορά κάτι (κάδος ανακύκλωσης)· τότε γίνεται πλήρης ανανέωση του ευρετηρίου αναζήτησης·
 - "fresh": σελίδες με νέο αρχείο ή νέες σελίδες των τελευταίων 14 ημερών (για την ένδειξη «νέο»),
   ΜΟΝΟ όσες βλέπουν όλοι οι ρόλοι φοιτητών.
 """
@@ -84,7 +85,7 @@ def content_info(now):
     """Τελευταία αλλαγή υλικού και σελίδες με νέο υλικό (μόνο ορατές στους φοιτητές)."""
     role_default = {r: "page-view-all" in (api("/api/roles/%d" % r).get("permissions") or []) for r in STUDENT_ROLES}
     cutoff = now - timedelta(days=FRESH_DAYS)
-    pages, latest, fresh = {}, None, []
+    pages, latest, fresh, gone = {}, None, [], None
 
     def page(pid):
         if pid not in pages:
@@ -129,9 +130,12 @@ def content_info(now):
             ts = parse(x.get("created_at"))
             if ts and (latest is None or ts > latest):
                 latest = ts
+            if ts and (gone is None or ts > gone):
+                gone = ts
     except Exception:
         pass
-    return (int(latest.timestamp() * 1000) if latest else 0), fresh[:80]
+    ms = lambda d: int(d.timestamp() * 1000) if d else 0
+    return ms(latest), fresh[:80], ms(gone)
 
 
 def _plain(t):
@@ -188,7 +192,8 @@ stats = {
     "t": int(time.time() * 1000),
 }
 try:
-    stats["c"], stats["fresh"] = content_info(now)
+    # "x": πότε σβήστηκε κάτι τελευταία φορά — τότε οι browsers ξαναφτιάχνουν ολόκληρο το ευρετήριο αναζήτησης (αλλιώς μόνο ό,τι άλλαξε)
+    stats["c"], stats["fresh"], stats["x"] = content_info(now)
 except Exception as e:  # τα στατιστικά συνεχίζουν κι αν αποτύχει αυτό
     print("WARN content", type(e).__name__)
 try:

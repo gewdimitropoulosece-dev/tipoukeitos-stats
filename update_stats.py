@@ -38,12 +38,13 @@ def api(path, data=None, content_type=None):
         req.add_header("Content-Type", content_type)
     # Επαναπροσπάθεια σε προσωρινά σφάλματα: το ίδιο κλειδί χρησιμοποιεί και το ευρετήριο PDF,
     # οπότε όσο τρέχει μπορεί να γεμίσει το όριο αιτημάτων του BookStack (429) ή να αργεί ο server (5xx).
+    # Και το 403 είναι κάποιες φορές προσωρινό (το τείχος προστασίας του server κόβει στιγμιαία το GitHub).
     for i in range(5):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            if i == 4 or (e.code != 429 and e.code < 500):
+            if i == 4 or (e.code not in (403, 429) and e.code < 500) or (e.code == 403 and i >= 2):
                 raise
             wait = e.headers.get("Retry-After") if e.code == 429 else None
             wait = min(int(wait), 45) if wait and wait.isdigit() else 5 * (i + 1)
